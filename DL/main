@@ -1,0 +1,165 @@
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, TimeDistributed, Conv1D, MaxPooling1D, Flatten, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.model_selection import train_test_split
+from scipy.stats import pearsonr
+from LinearPreProcessing import PreProcessor
+from LSTM_model import LSTM_model
+from SimpleCNN_LSTM import Simple_CNN_LSTM
+from ResnetCNNLSTM import ResnetCNNLSTM
+from BiGRU import BiGRU
+from Resnet_CNN_BiLSTM import Resnet_CNN_BiLSTM
+from FFN import SLP
+from MLP import MLP
+from Metrics import Metrics
+
+#data = pd.read_csv('delhi_aqi.csv')
+
+input_cols = ['co', 'no', 'no2', 'o3', 'pm2_5', 'pm10']  # Input features
+
+prep = PreProcessor()
+prep.PreProcessing('delhi_aqi.csv')
+#prep.KNN()
+#prep.standardize_data()
+data = prep.gas_data
+#data = prep.std_data
+target_cols = prep.target_gas_columns
+input_cols = data.columns
+
+# Define model parameters
+lstm_layer_sizes = 50
+lstm_activations = "relu"
+cnn_activations = "relu"
+loss='mae'
+optimizer='adam'
+n_epochs=50
+verbose=2
+time_window=7
+'''
+mean_vals=np.mean(data, axis=0)
+std_vals=np.std(data, axis=0)
+data = (data - mean_vals)/std_vals
+
+def destd(target_col):
+'''
+mean_vals = {}
+std_vals = {}
+actual_aqi_vals = {}
+pred_aqi_vals = {}
+actual_values = {}
+pred_values = {}
+
+def std(data, type_of):
+    mean_vals[type_of]=np.mean(data, axis=0)
+    std_vals[type_of]=np.std(data, axis=0)
+    data = (data - mean_vals[type_of])/std_vals[type_of]
+    return data
+
+def destd(data, type_of):
+    return (data*std_vals[type_of])/mean_vals[type_of]
+
+metrics_res = []
+metrics_results = []
+
+#S_model = SLP()
+#S_model = Simple_CNN_LSTM()
+S_model = ResnetCNNLSTM()
+target_cols = ['NO2']
+for target_col in target_cols:
+    print(f'\nFor {target_col}:')
+    #input_col = [col for col in input_cols if col!=target_col]
+    input_data = data[input_cols].values
+    target_data = data[target_col].values.reshape(-1, 1)
+    #y_pred = prep.destandardize_value(y_pred, target_gas)
+    actual_vals = []
+    pred_vals = []
+    metrics = Metrics()
+    for i in range(24*6*5,24*6*6):
+        input_features = input_data[:i+1]
+        next_input = input_data[i+1]
+        target_features = target_data[:i+1]
+        next_target = target_data[i+1]
+        x_train, x_test, y_train, y_test = train_test_split(input_features, target_features, test_size=0.3, random_state=43)
+
+        #x_train = std(x_train, 'x_train')
+        #y_train = std(y_train, 'y_train')
+        #x_test = std(x_test, 'x_test')
+        #y_test = std(y_test, 'y_test')
+        
+        #S_model.add_gas(target_col)
+        # Reshape input data for TimeDistributed layer
+        x_train = x_train.reshape((x_train.shape[0], 1, 1, x_train.shape[1]))
+        x_test = x_test.reshape((x_test.shape[0], 1, 1, x_test.shape[1]))
+        next_input = next_input.reshape((1, 1, 1, next_input.shape[0]))
+        #S_model.model_add(x_train, y_train, x_test, y_test)
+
+        shape = input_shape=(None, x_train.shape[2], x_train.shape[3])
+        model = S_model.resnet_CNN(shape, 1, 20, x_train, y_train, x_test, y_test)
+        #model = S_model.resnet_CNN(x_train.shape[-1], 1, x_train, y_train, x_test, y_test)
+        S_model.compile(loss=loss, optimizer=optimizer)
+        history = S_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=n_epochs,verbose=verbose)
+
+
+        #x_test = gas_data[input_col].values
+        #x_test = x_test.reshape((x_test.shape[0], 1, 1, x_test.shape[1]))
+        #y_test = data[target_col].values.reshape(-1,1)
+
+        #x_test = destd(x_test, 'x_test')
+        #y_test = destd(y_test, 'y_test')
+        preds = S_model.predict(next_input)
+        next_targets = target_data[i+1]
+        #preds = model.predict(x_test)
+        #preds = preds.reshape(preds.shape[0])
+        preds = preds.reshape(preds.shape[-1])
+        actuals = next_target.reshape(next_target.shape[0])
+        #next_targets = np.squeeze(next_targets)
+
+        actual_vals = np.concatenate((actual_vals, actuals))
+        pred_vals = np.concatenate((pred_vals, np.array(preds)))
+        metrics.calc_daily_metrics(actual_vals, pred_vals, i, 24*5*7, target_col)
+
+        if i==24*6*5:
+            r=0
+            r2=0
+            mae=0
+            mse=0
+            rmse = 0
+        else:
+            r,_ = pearsonr(actual_vals, pred_vals)
+            r2 = r2_score(actual_vals, pred_vals)
+            mae = mean_absolute_error(actual_vals, pred_vals)
+            mse = mean_squared_error(actual_vals, pred_vals)
+            rmse = np.sqrt(mse)
+        metrics_results.append({'Gas': target_col, 'R': r, 'R2': r2, 'MAE': mae, 'MSE': mse, 'RMSE': rmse})
+        metrics_list = pd.DataFrame(metrics_results)
+        print("\nMetrics Results:")
+        print(metrics_list)
+
+    actual_vals = np.array(actual_vals)
+    pred_vals = np.array(pred_vals)
+
+    actual_values[target_col] = actual_vals
+    pred_values[target_col] = pred_vals
+    hours = range(len(actual_vals))
+    days = [hour / (24*6 + 1) for hour in hours]
+    metrics.graph_values(actual_vals, pred_vals, days, target_col,'SLP')
+
+    #metrics.graph_metrics(actual_vals, pred_vals, target_col, days, 'CNN')
+    metrics=Metrics()
+    #calc_overall_metrics(self, actual_vals, pred_vals, target_gas, gases, num, model_type)
+    metrics.calc_overall_metrics(actual_vals, pred_vals, target_col, data, 1, 'SLP')
+
+    metrics_res.append(metrics.metrics_res)
+    metrics.bar_metrics(target_col)
+# Convert evaluation results to DataFrame for easier analysis
+metrics = pd.DataFrame(metrics_res)
+print("\nMetrics Results:")
+print(metrics)
+
+
+
+
